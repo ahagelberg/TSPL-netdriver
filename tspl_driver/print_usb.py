@@ -32,16 +32,17 @@ class PrinterDeviceNotFoundError(Exception):
 
 def send_tspl_to_printer(printer: PrinterConfig, payload: bytes) -> None:
     """
-    Write TSPL through libusb bulk OUT to the device selected by VID/PID and
-    optional serial.
+    Write TSPL through libusb bulk OUT to the device selected by VID/PID,
+    optional usb_port_path (Linux sysfs name), and optional serial when port is unset.
     """
     if _log.isEnabledFor(logging.DEBUG):
         _log.debug(
-            "send_tspl_to_printer printer=%s vid=%#06x pid=%#06x serial=%s bytes=%d",
+            "send_tspl_to_printer printer=%s vid=%#06x pid=%#06x serial=%s port=%s bytes=%d",
             printer.id,
             printer.vendor_id,
             printer.product_id,
             printer.serial,
+            printer.usb_port_path,
             len(payload),
         )
         _log.debug(
@@ -55,11 +56,16 @@ def send_tspl_to_printer(printer: PrinterConfig, payload: bytes) -> None:
             printer.product_id,
             printer.serial,
             payload,
+            printer.usb_port_path,
         )
     except UsbBulkDeviceNotFoundError as e:
+        hint = ""
+        if printer.usb_port_path:
+            hint = f" port {printer.usb_port_path!r}"
+        elif printer.serial:
+            hint = f" serial {printer.serial!r}"
         raise PrinterDeviceNotFoundError(
-            f"No USB bulk device for {printer.vendor_id:#06x}:{printer.product_id:#06x}"
-            + (f" serial {printer.serial!r}" if printer.serial else "")
+            f"No USB bulk device for {printer.vendor_id:#06x}:{printer.product_id:#06x}{hint}"
         ) from e
     except usb.core.USBError as e:
         raise OSError(errno.EIO, f"USB bulk write failed: {e}") from e

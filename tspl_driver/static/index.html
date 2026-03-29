@@ -46,6 +46,16 @@
             <button type="button" class="btn btn--secondary btn--reveal-secret" id="btnToggleSrvApiKey" aria-pressed="false" aria-label="Show config API key">Show</button>
           </div>
         </label>
+        <details class="panel__advanced">
+          <summary class="panel__advanced-summary">Advanced (browser / CORS)</summary>
+          <div class="panel__advanced-body">
+            <p class="panel__advanced-lede">Allowed <code>Origin</code> values for cross-origin browser clients (e.g. WordPress admin calling this API). One origin per line. Restart the TSPL process after saving so CORS changes apply.</p>
+            <label class="field">
+              <span class="field__label">CORS allowed origins</span>
+              <textarea id="srvCorsOrigins" class="field__input field__input--code panel__advanced-textarea" rows="6" spellcheck="false" placeholder="https://example.com"></textarea>
+            </label>
+          </div>
+        </details>
       </div>
     </section>
 
@@ -64,6 +74,28 @@
         <button type="button" id="btnAddTpl" class="btn btn--secondary">Add template</button>
         <button type="button" id="btnSaveTpl" class="btn">Save all</button>
       </div>
+      <details class="panel__help">
+        <summary class="panel__help-summary">How templates work</summary>
+        <div class="panel__help-body">
+          <p class="panel__help-lede">
+            The <strong>Elements</strong> field is a JSON array. Each item must have a <code>type</code>. Order matters: later elements draw on top of earlier ones (put <code>box</code> before <code>text</code> to frame text).
+          </p>
+          <ul class="panel__help-list">
+            <li>
+              <code>"type": "text"</code> — <code>x</code>, <code>y</code> (top-left, mm from label origin), <code>font</code> (e.g. <code>"3"</code>), <code>content</code> with optional placeholders <code>{{name}}</code> filled from API / test data.
+            </li>
+            <li>
+              <code>"type": "box"</code> — rectangle outline: <code>x</code>, <code>y</code> (top-left), <code>width</code>, <code>height</code>, <code>line_width</code> (border thickness, mm). Emitted as TSPL <code>BOX</code> (thickness converted to dots from printer DPI).
+            </li>
+          </ul>
+          <p class="panel__help-example-label">Example (border then text):</p>
+          <pre class="panel__help-pre" aria-label="Example elements JSON">[
+  { "type": "box", "x": 1, "y": 1, "width": 38, "height": 28, "line_width": 0.25 },
+  { "type": "text", "x": 3, "y": 5, "font": "3", "content": "{{line1}}" }
+]</pre>
+          <p class="panel__help-foot">Placeholder keys required for printing must appear in <strong>Test data</strong> or in the API <code>data</code> object. Printers use each printer’s <strong>TEXT payload encoding</strong> for text. Very limited firmware may not implement <code>BOX</code>; use only <code>text</code> elements if the printer errors on borders.</p>
+        </div>
+      </details>
       <div id="listTemplates" class="item-list"></div>
       <div id="tplTestModal" class="modal is-hidden" aria-hidden="true">
         <div class="modal__backdrop"></div>

@@ -11,6 +11,7 @@ import usb.util
 
 from tspl_driver.runtime_log import LOGGER_NAME
 from tspl_driver.usb_discover import usb_serial_matches
+from tspl_driver.usb_topology import linux_usb_sys_name_from_pyusb
 
 _log = logging.getLogger(f"{LOGGER_NAME}.usb_bulk")
 
@@ -57,12 +58,20 @@ def find_usb_device(
     vendor_id: int,
     product_id: int,
     serial: str | None,
+    usb_port_path: str | None = None,
 ) -> usb.core.Device | None:
-    """Locate device by VID/PID and optional serial (iSerial)."""
+    """Locate device by VID/PID; optional Linux sysfs path and/or iSerial."""
     found = list(
         usb.core.find(find_all=True, idVendor=vendor_id, idProduct=product_id)
     )
     if not found:
+        return None
+    want_port = (usb_port_path or "").strip() or None
+    if want_port:
+        for dev in found:
+            pn = linux_usb_sys_name_from_pyusb(dev)
+            if pn == want_port:
+                return dev
         return None
     if serial is None:
         return found[0]
@@ -85,16 +94,21 @@ def write_tspl_usb_bulk(
     product_id: int,
     serial: str | None,
     payload: bytes,
+    usb_port_path: str | None = None,
 ) -> None:
     """
     Send TSPL bytes via USB bulk OUT (no kernel printer/tty driver on the data path).
     Requires permission to access the raw USB device (udev, plugdev, or root).
     """
-    dev = find_usb_device(vendor_id, product_id, serial)
+    dev = find_usb_device(vendor_id, product_id, serial, usb_port_path)
     if dev is None:
+        extra = ""
+        if usb_port_path:
+            extra = f" port {usb_port_path!r}"
+        elif serial:
+            extra = f" serial {serial!r}"
         raise UsbBulkDeviceNotFoundError(
-            f"No USB device {vendor_id:#06x}:{product_id:#06x}"
-            + (f" serial {serial!r}" if serial else "")
+            f"No USB device {vendor_id:#06x}:{product_id:#06x}{extra}"
         )
     intf, ep_out = _pick_bulk_out_endpoint(dev)
     _detach_kernel_drivers(dev, intf)

@@ -30,7 +30,7 @@ from tspl_driver.api_schemas import (
 from tspl_driver.config_store import load_config, save_config_atomic
 from tspl_driver.models import AppConfig
 from tspl_driver.print_usb import PrinterDeviceNotFoundError, send_tspl_to_printer
-from tspl_driver.state import get_config, get_config_path, init_state, set_config
+from tspl_driver.state import get_config, get_config_path, init_state
 from tspl_driver.template_render import get_label_size, render_template_tspl
 from tspl_driver.tspl.builder import build_test_label_tspl
 from tspl_driver.runtime_log import LOGGER_NAME, append_exception_fields
@@ -372,7 +372,6 @@ def create_app() -> FastAPI:
     async def write_config(body: AppConfig) -> dict:
         path = get_config_path()
         save_config_atomic(path, body)
-        set_config(body)
         return OkEnvelope(data=body.model_dump(mode="json")).model_dump()
 
     @v1.get("/usb/discover")
@@ -392,6 +391,7 @@ def create_app() -> FastAPI:
                 vendor_id=x.vendor_id,
                 product_id=x.product_id,
                 serial=x.serial,
+                usb_port_path=x.usb_port_path,
                 manufacturer=x.manufacturer,
                 product=x.product,
             )
@@ -446,7 +446,7 @@ def create_app() -> FastAPI:
             return _json_err("not_found", f"Unknown printer {body.printer_id!r}", 404)
         try:
             logger.debug("print/raw printer_id=%s", body.printer_id)
-            raw = body.tspl.encode("utf-8", errors="replace")
+            raw = body.tspl.encode(pr.text_encoding, errors="replace")
             logger.debug("print/raw %d bytes", len(raw))
             send_tspl_to_printer(pr, raw)
         except PrinterDeviceNotFoundError as e:
@@ -483,6 +483,7 @@ def create_app() -> FastAPI:
                 direction=pr.direction,
                 offset_x_mm=pr.offset_x_mm,
                 offset_y_mm=pr.offset_y_mm,
+                text_encoding=pr.text_encoding,
             )
             logger.debug("printer test %d bytes printer_id=%s", len(payload), printer_id)
             send_tspl_to_printer(pr, payload)
@@ -557,7 +558,7 @@ def bootstrap_config() -> tuple[Path, AppConfig]:
             raise FileNotFoundError(f"Missing {EXAMPLE_CONFIG_PATH}")
         shutil.copy(EXAMPLE_CONFIG_PATH, path)
     cfg = load_config(path)
-    init_state(path, cfg)
+    init_state(path)
     return path, cfg
 
 

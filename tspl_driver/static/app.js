@@ -6,8 +6,16 @@
   const SECRET_TOGGLE_SHOW = "Show";
   const SECRET_TOGGLE_HIDE = "Hide";
   const DEFAULT_TEMPLATE_ELEMENTS_JSON =
-    '[{"type":"text","x_mm":2,"y_mm":2,"font":"3","content":"{{line1}}"}]';
+    '[{"type":"text","x":2,"y":2,"font":"3","content":"{{line1}}"}]';
   const DEFAULT_TEST_DATA_JSON = '{"line1":"Test"}';
+  /** Python codec names for printer TEXT payloads (see printer manual for best match). */
+  const PRINTER_TEXT_ENCODING_OPTIONS = [
+    { value: "utf-8", label: "UTF-8" },
+    { value: "cp1252", label: "Windows-1252 (Western European)" },
+    { value: "iso8859-1", label: "ISO-8859-1 (Latin-1)" },
+    { value: "iso8859-15", label: "ISO-8859-15 (Latin-9, euro)" },
+    { value: "cp865", label: "PC865 / IBM Nordic (Python cp865)" },
+  ];
 
   let appConfig = null;
   /** Likely TSPL devices from last GET /usb/discover (`data.devices`). */
@@ -140,12 +148,34 @@
     return j.data !== undefined ? j.data : j;
   }
 
+  function parseCorsOriginsText(text) {
+    if (!text || !String(text).trim()) {
+      return [];
+    }
+    return String(text)
+      .split(/[\r\n,]+/)
+      .map(function (s) {
+        return s.trim();
+      })
+      .filter(Boolean);
+  }
+
   function readServerFromDom() {
     const port = parseInt($("srvPort").value, 10);
+    const corsEl = $("srvCorsOrigins");
+    let corsOrigins;
+    if (corsEl) {
+      corsOrigins = parseCorsOriginsText(corsEl.value);
+    } else if (appConfig && appConfig.server && Array.isArray(appConfig.server.cors_origins)) {
+      corsOrigins = appConfig.server.cors_origins.slice();
+    } else {
+      corsOrigins = [];
+    }
     return {
       bind_address: $("srvBind").value.trim(),
       port: Number.isFinite(port) ? port : 8787,
       api_key: $("srvApiKey").value,
+      cors_origins: corsOrigins,
     };
   }
 
@@ -156,6 +186,11 @@
     $("srvBind").value = appConfig.server.bind_address;
     $("srvPort").value = String(appConfig.server.port);
     $("srvApiKey").value = appConfig.server.api_key;
+    const corsEl = $("srvCorsOrigins");
+    if (corsEl) {
+      const co = appConfig.server.cors_origins;
+      corsEl.value = Array.isArray(co) ? co.join("\n") : "";
+    }
   }
 
   function readSizesFromDom() {
@@ -331,9 +366,19 @@
 
   function findUsbIndexForPrinter(p) {
     let i;
+    const wantPort =
+      p.usb_port_path && String(p.usb_port_path).trim() !== ""
+        ? String(p.usb_port_path).trim()
+        : null;
     for (i = 0; i < usbDevices.length; i++) {
       const d = usbDevices[i];
       if (d.vendor_id !== p.vendor_id || d.product_id !== p.product_id) {
+        continue;
+      }
+      if (wantPort) {
+        if (d.usb_port_path === wantPort) {
+          return i;
+        }
         continue;
       }
       if (p.serial) {
@@ -374,6 +419,8 @@
       if (!sel) {
         return;
       }
+      const portEl = card.querySelector(".js-pr-usb-port");
+      const portVal = portEl && portEl.value.trim() !== "" ? portEl.value.trim() : null;
       const printerLike = {
         vendor_id: parseInt(card.querySelector(".js-pr-vid").value, 10) || 0,
         product_id: parseInt(card.querySelector(".js-pr-pid").value, 10) || 0,
@@ -381,6 +428,7 @@
           card.querySelector(".js-pr-ser").value.trim() === ""
             ? null
             : card.querySelector(".js-pr-ser").value.trim(),
+        usb_port_path: portVal,
       };
       fillUsbSelect(sel, printerLike);
     });
@@ -481,17 +529,25 @@
       const vid = parseInt(card.querySelector(".js-pr-vid").value, 10);
       const pid = parseInt(card.querySelector(".js-pr-pid").value, 10);
       const ser = card.querySelector(".js-pr-ser").value.trim();
+      const usbPort = card.querySelector(".js-pr-usb-port");
+      const portStr = usbPort && usbPort.value.trim() !== "" ? usbPort.value.trim() : null;
       out.push({
         id: idEl.value.trim(),
         name: card.querySelector(".js-pr-name").value.trim() || idEl.value.trim(),
         vendor_id: Number.isFinite(vid) ? vid : 0,
         product_id: Number.isFinite(pid) ? pid : 0,
         serial: ser === "" ? null : ser,
+        usb_port_path: portStr,
         default_label_size_id: card.querySelector(".js-pr-ls").value,
         offset_x_mm: parseFloat(card.querySelector(".js-pr-ox").value) || 0,
         offset_y_mm: parseFloat(card.querySelector(".js-pr-oy").value) || 0,
         direction: Number.isFinite(dir) ? dir : 0,
         dpi: 203,
+        text_encoding: (function () {
+          const el = card.querySelector(".js-pr-encoding");
+          const v = el && el.value ? el.value.trim() : "";
+          return v || "utf-8";
+        })(),
       });
     });
     return out;
@@ -542,6 +598,7 @@
         '  <input type="hidden" class="js-pr-vid" value="0" />' +
         '  <input type="hidden" class="js-pr-pid" value="0" />' +
         '  <input type="hidden" class="js-pr-ser" value="" />' +
+        '  <input type="hidden" class="js-pr-usb-port" value="" />' +
         '  <p class="card__kicker">Label</p>' +
         '  <label class="field"><span class="field__label">Label size preset</span>' +
         '    <select class="field__select js-pr-ls"></select></label>' +
@@ -557,6 +614,10 @@
         '        <option value="1">180° (upside down)</option>' +
         "      </select></label>" +
         "  </div>" +
+        '  <p class="card__kicker">Text encoding</p>' +
+        '  <label class="field"><span class="field__label">TEXT payload encoding</span>' +
+        '    <select class="field__select js-pr-encoding"></select></label>' +
+        '  <p class="field__hint">If the manual lists <strong>code page PC865</strong>, choose <strong>PC865 / IBM Nordic (Python cp865)</strong> above.</p>' +
         "</div>";
       root.appendChild(article);
       const titleEl = article.querySelector(".js-pr-card-title");
@@ -566,11 +627,13 @@
       article.querySelector(".js-pr-vid").value = String(p.vendor_id);
       article.querySelector(".js-pr-pid").value = String(p.product_id);
       article.querySelector(".js-pr-ser").value = p.serial || "";
+      article.querySelector(".js-pr-usb-port").value = p.usb_port_path || "";
       const usbSel = article.querySelector(".js-pr-usb-pick");
       fillUsbSelect(usbSel, {
         vendor_id: p.vendor_id,
         product_id: p.product_id,
         serial: p.serial || null,
+        usb_port_path: p.usb_port_path || null,
       });
       usbSel.addEventListener("change", function () {
         const v = usbSel.value;
@@ -579,6 +642,7 @@
           article.querySelector(".js-pr-vid").value = "0";
           article.querySelector(".js-pr-pid").value = "0";
           article.querySelector(".js-pr-ser").value = "";
+          article.querySelector(".js-pr-usb-port").value = "";
           return;
         }
         const d = usbDevices.find(function (x) {
@@ -590,6 +654,7 @@
         article.querySelector(".js-pr-vid").value = String(d.vendor_id);
         article.querySelector(".js-pr-pid").value = String(d.product_id);
         article.querySelector(".js-pr-ser").value = d.serial || "";
+        article.querySelector(".js-pr-usb-port").value = d.usb_port_path || "";
         const friendly = (
           (d.manufacturer || "") +
           " " +
@@ -605,6 +670,27 @@
       article.querySelector(".js-pr-ox").value = String(p.offset_x_mm);
       article.querySelector(".js-pr-oy").value = String(p.offset_y_mm);
       article.querySelector(".js-pr-dir").value = p.direction === 1 ? "1" : "0";
+      const encSel = article.querySelector(".js-pr-encoding");
+      const encVal = p.text_encoding || "utf-8";
+      encSel.textContent = "";
+      let encMatched = false;
+      PRINTER_TEXT_ENCODING_OPTIONS.forEach(function (opt) {
+        const o = document.createElement("option");
+        o.value = opt.value;
+        o.textContent = opt.label;
+        if (opt.value === encVal) {
+          o.selected = true;
+          encMatched = true;
+        }
+        encSel.appendChild(o);
+      });
+      if (!encMatched) {
+        const o = document.createElement("option");
+        o.value = encVal;
+        o.textContent = encVal + " (custom)";
+        o.selected = true;
+        encSel.appendChild(o);
+      }
       article.querySelector(".js-pr-name").addEventListener("input", function () {
         const nm = this.value.trim();
         const idv = article.querySelector(".js-pr-id").value.trim();
@@ -835,11 +921,13 @@
       vendor_id: 0,
       product_id: 0,
       serial: null,
+      usb_port_path: null,
       default_label_size_id: appConfig.label_sizes[0].id,
       offset_x_mm: 0,
       offset_y_mm: 0,
       direction: 0,
       dpi: 203,
+      text_encoding: "utf-8",
     });
     renderPrinters();
     if (usbDevices.length === 0) {

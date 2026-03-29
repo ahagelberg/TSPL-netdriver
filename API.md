@@ -100,9 +100,10 @@ Path parameters **`printer_id`** and **`template_id`** are the corresponding **`
 **Success `data`**
 
 - **`devices`:** Array of objects:
-  - **`device_key`** — Stable string: lowercase hex **`vid`**, **`pid`**, and **`serial`** as `vvvv:pppp:<serial>`, where `<serial>` is the raw serial string or empty if none (e.g. `1fc9:2016:0123456789AB`).
-  - **`label`** — Short display string (manufacturer/product and IDs).
+  - **`device_key`** — Stable string: lowercase hex **`vid`**: **`pid`**, then **`@`**, then the Linux **sysfs** USB device name (same as **`usb_port_path`**, e.g. `1fc9:2016@1-2.3`). This distinguishes two identical models on different ports even when **`serial`** is missing or duplicated.
+  - **`label`** — Short display string (manufacturer/product, IDs, and port path).
   - **`vendor_id`**, **`product_id`** — Integers `0`…`65535`.
+  - **`usb_port_path`** — Linux sysfs name for that gadget (e.g. `1-2.3`); store in **`printers[].usb_port_path`** to target that physical port.
   - **`serial`**, **`manufacturer`**, **`product`** — Nullable strings from udev.
 
 - **`usb_total`** — Count of all enumerated USB devices (before the name filter).
@@ -121,7 +122,7 @@ Path parameters **`printer_id`** and **`template_id`** are the corresponding **`
 | `printer_id` | string | Yes |
 | `data` | object of string values | No (default `{}`) |
 
-Non-string values in **`data`** are coerced to strings. Template placeholders `{{name}}` are filled from **`data`** merged with the template’s **`test_data`** (request **`data`** overrides **`test_data`** for the same keys).
+Non-string values in **`data`** are coerced to strings. Template placeholders `{{name}}` are filled from **`data`** merged with the template’s **`test_data`** (request **`data`** overrides **`test_data`** for the same keys). **`TEXT`** payloads use the printer’s **`text_encoding`**.
 
 **Errors:** Unknown template or printer → **`404`** `not_found`. Missing placeholder keys → **`422`** `render_error`. USB issues → **`503`** `device_not_found` or `io_error`.
 
@@ -136,7 +137,7 @@ Non-string values in **`data`** are coerced to strings. Template placeholders `{
 | `printer_id` | string | Yes |
 | `tspl` | string | Yes (non-empty) |
 
-The **`tspl`** string is encoded as UTF-8 (invalid sequences replaced) and sent as-is; no automatic `SIZE`/`GAP` is added.
+The **`tspl`** string is encoded with the selected printer’s **`text_encoding`** (Python codec name, e.g. **`utf-8`**, **`cp1252`**, **`cp865`** for PC865; unencodable characters are replaced) and sent as-is; no automatic `SIZE`/`GAP` is added. Match the encoding the printer expects (often PC865 on basic Nordic models).
 
 The web UI **TSPL debug** panel at the bottom of the page calls this endpoint with the selected printer and textarea contents.
 
@@ -144,7 +145,7 @@ The web UI **TSPL debug** panel at the bottom of the page calls this endpoint wi
 
 ### `POST /api/v1/printers/{printer_id}/test`
 
-Runs a small built-in test label using the printer’s **`default_label_size_id`** preset and the printer’s **`dpi`**, **`direction`**, and offsets.
+Runs a small built-in test label using the printer’s **`default_label_size_id`** preset and the printer’s **`dpi`**, **`direction`**, offsets, and **`text_encoding`**.
 
 **Body:** `{}`
 
@@ -194,11 +195,13 @@ Top-level keys: **`server`**, **`label_sizes`**, **`printers`**, **`templates`**
 | `id` | string | `^[a-zA-Z0-9_-]+$` |
 | `name` | string | Non-empty |
 | `vendor_id`, `product_id` | integer | `0`…`65535` |
-| `serial` | string or null | USB serial for matching |
+| `serial` | string or null | USB **iSerial** string when helpful |
+| `usb_port_path` | string or null | Linux sysfs USB device name (e.g. `1-2.3`) from **`GET /usb/discover`**; when set, printing matches this port and ignores duplicate/wrong **serial** |
 | `default_label_size_id` | string | Must exist in `label_sizes` |
 | `offset_x_mm`, `offset_y_mm` | number | `-100`…`100` |
 | `direction` | `0` or `1` | `0` = default, `1` = 180°; other integers are normalized to `0` or `1` on read |
 | `dpi` | integer | `100`…`600`, default `203` |
+| `text_encoding` | string | Python codec name for **`TEXT`** string payloads and for **`POST /print/raw`** body bytes; default **`utf-8`**. For **PC865** (IBM Nordic / DOS Nordic), use **`cp865`**. |
 
 Unknown extra keys on a printer object are **ignored** (e.g. legacy fields from older configs).
 
@@ -209,7 +212,7 @@ Unknown extra keys on a printer object are **ignored** (e.g. legacy fields from 
 | `id` | string | `^[a-zA-Z0-9_-]+$` |
 | `name` | string | Non-empty |
 | `label_size_id` | string | Must exist in `label_sizes` |
-| `elements` | array | Each item: `type` (only `"text"`), `x_mm`, `y_mm`, `font` (default `"3"`, max length 8), `content` (placeholders `{{name}}`, max length 4096) |
+| `elements` | array | Each item has `type`; distances are **mm**. **`text`**: `x`, `y`, `font` (default `"3"`), `content` (placeholders `{{name}}`). **`box`**: `x`, `y` (top-left), `width`, `height`, `line_width` (border thickness, mm; emitted as TSPL `BOX` with thickness in dots). Legacy rows without `type` are treated as `text`; legacy keys `x_mm` / `y_mm` / `width_mm` / `height_mm` / `line_width_dots` are accepted on load. |
 | `test_data` | object | String values; keys are placeholder names for tests |
 
 **Id rule:** Every **`id`** in **`label_sizes`**, **`printers`**, and **`templates`** must be **globally unique** across those three arrays.

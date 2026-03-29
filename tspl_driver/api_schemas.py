@@ -43,6 +43,7 @@ class UsbDiscoverDevice(BaseModel):
     vendor_id: int
     product_id: int
     serial: str | None = None
+    usb_port_path: str
     manufacturer: str | None = None
     product: str | None = None
 
