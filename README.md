@@ -60,15 +60,27 @@ From a clone of this repository (requires **rsync**):
 sudo ./install-to-opt.sh
 ```
 
-This copies the tree to `/opt/tspl-netdriver` (excluding `.venv`, `.git`, `config.json`, caches), creates a system user **`tspl`** and a venv, runs **`pip install -e .`**, seeds **`config.json`** from the example if missing, installs **`systemd/tspl-netdriver.service`** into `/etc/systemd/system/`, and reloads systemd.
+This copies the tree to `/opt/tspl-netdriver` (excluding `.venv`, `.git`, `config.json`, caches), creates group **`plugdev`** if missing, creates a system user **`tspl`** and adds it to **`plugdev`**, installs **`/etc/sudoers.d/tspl-netdriver`** so **`tspl`** may run **`/usr/bin/python3 /opt/tspl-netdriver/refresh_udev_from_config.py`** as root without a password (that script writes udev rules for USB), runs **`refresh_udev_from_config.py`** once, runs **`pip install -e .`**, seeds **`config.json`** from the example if missing, installs **`systemd/tspl-netdriver.service`** into `/etc/systemd/system/`, and reloads **systemd**.
 
 **Overrides:** `TSPL_INSTALL_ROOT` (default `/opt/tspl-netdriver`), `TSPL_SERVICE_USER` (default `tspl`).
+
+After saving configuration in the UI (or **`PUT /api/v1/config`**), the service refreshes **`/etc/udev/rules.d/70-tspl-netdriver.rules`** from the printers in **`config.json`** via that sudo rule—no root login required. Unplug/replug the printer or reboot if the device node still has old permissions. Re-run **`install-to-opt.sh`** after upgrades to refresh the installed files and sudoers line.
 
 Then:
 
 ```bash
 sudo systemctl enable --now tspl-netdriver.service
 ```
+
+### Uninstall (`/opt` install)
+
+Removes the systemd unit, sudoers drop-in, udev rules file, and the install directory (including **`config.json`** and the venv). Removes the service user **only** if their home directory equals the install root (as created by **`install-to-opt.sh`**); otherwise it deletes the tree only and leaves that account alone. Does **not** delete the system **`plugdev`** group.
+
+```bash
+sudo ./uninstall-to-opt.sh --yes
+```
+
+Use the same **`TSPL_INSTALL_ROOT`** / **`TSPL_SERVICE_USER`** as for install if you overrode them.
 
 ## Layout (Python packages)
 
@@ -89,4 +101,4 @@ See **[API.md](API.md)**.
 ## Requirements
 
 - Linux, **libusb** (e.g. `libusb-1.0-0`), and **PyUSB**. Printing is **only** via **USB bulk OUT** through libusb — the service does **not** open `/dev/usb/lp*`, `/dev/lp*`, `/dev/ttyACM*`, `/dev/ttyUSB*`, or raw **`/dev/bus/usb/...`** for a naive `write()`.
-- **Permissions:** The process must be allowed to open the USB device for control/bulk transfers. Typical fixes: install **udev** rules matching your **VID/PID** (e.g. `SUBSYSTEM=="usb", ATTR{idVendor}=="1fc9", ATTR{idProduct}=="2016", MODE="0664", GROUP="plugdev"`) and run the service as a user in **`plugdev`**, or use **`TAG+="uaccess"`** where appropriate. Test temporarily with **root** only to confirm it is a permission issue.
+- **Permissions:** The service user must be able to open the raw USB device nodes under **`/dev/bus/usb/`** (PyUSB / libusb). **`install-to-opt.sh`** adds **`tspl`** to **`plugdev`**, installs passwordless **`sudo`** for **`refresh_udev_from_config.py`** only, and writes initial udev rules. Saving **`config.json`** (UI or API) runs that script so new printers get udev entries at runtime. **`SupplementaryGroups=plugdev`** is set in the shipped systemd unit. For a dev install without the script, add equivalent **udev** rules and **sudo**/group setup yourself.

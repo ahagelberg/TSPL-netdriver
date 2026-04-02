@@ -31,6 +31,8 @@ from printer.renderer import (
 )
 
 _PLACEHOLDER_RE = re.compile(r"\{\{([a-zA-Z0-9_]+)\}\}")
+# Same 180° as TSPL DIRECTION 1 so preview matches peeled label; no extra flip.
+TSPL_PREVIEW_ROTATION_DEGREES = 180
 
 # Built-in printer self-test pattern (TEXT + raster BITMAP), positions in mm from label origin.
 TEST_LABEL_TEXT_MM_X = 2.0
@@ -271,7 +273,7 @@ class TsplPrinter(Printer):
                 patch = mono_tspl_payload_to_pil_image(wb, el.height, raw)
                 _paste_l_mode(img, patch, xd, yd)
         if printer.direction == TSPL_DIRECTION_180:
-            img = img.rotate(180, expand=False)
+            img = img.rotate(TSPL_PREVIEW_ROTATION_DEGREES, expand=False)
         return img
 
     def render_printer_test_pattern(self, label_size: LabelSize, printer: PrinterConfig) -> bytes:

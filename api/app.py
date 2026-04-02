@@ -30,6 +30,7 @@ from api.schemas import (
     UsbDiscoverDevice,
 )
 from config.config_store import bootstrap_config, save_config_atomic
+from config.udev_refresh import try_refresh_udev_rules
 from config.models import AppConfig, LabelSize
 from usb_access.subsystem import PrinterDeviceNotFoundError, UsbSubsystem
 from app_logging.runtime_log import LOGGER_NAME, append_exception_fields
@@ -426,6 +427,7 @@ def create_app() -> FastAPI:
                 500,
                 exc=e,
             )
+        try_refresh_udev_rules()
         return OkEnvelope(data=body.model_dump(mode="json")).model_dump()
 
     @v1.get("/templates/{template_id}")

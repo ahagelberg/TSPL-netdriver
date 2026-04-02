@@ -13,6 +13,9 @@ set -euo pipefail
 INSTALL_ROOT="${TSPL_INSTALL_ROOT:-/opt/tspl-netdriver}"
 SERVICE_USER="${TSPL_SERVICE_USER:-tspl}"
 SERVICE_NAME="tspl-netdriver.service"
+# Must match config/udev_refresh.py and /etc/sudoers.d/tspl-netdriver (system python, not venv).
+UDEV_PYTHON="/usr/bin/python3"
+SUDOERS_D="/etc/sudoers.d/tspl-netdriver"
 
 REPO_ROOT=$(cd "$(dirname "$0")" && pwd)
 
@@ -47,25 +50,42 @@ if ! command -v rsync >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ ! -x "${UDEV_PYTHON}" ]]; then
+  echo "${UDEV_PYTHON} is required for udev refresh (install python3-minimal or python3)." >&2
+  exit 1
+fi
+
 echo "Installing from ${REPO_ROOT} to ${INSTALL_ROOT}"
 
 mkdir -p "${INSTALL_ROOT}"
 # No --delete: preserve files under INSTALL_ROOT that are not in the repo (e.g. local config tweaks).
 rsync -a "${RSYNC_EXCLUDES[@]}" "${REPO_ROOT}/" "${INSTALL_ROOT}/"
 
+if ! getent group plugdev >/dev/null 2>&1; then
+  groupadd --system plugdev
+  echo "Created group plugdev (for USB device nodes)."
+fi
+
 if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
   useradd --system --home-dir "${INSTALL_ROOT}" --shell /usr/sbin/nologin "${SERVICE_USER}"
   echo "Created system user ${SERVICE_USER}"
 fi
 
-if getent group plugdev >/dev/null 2>&1; then
-  usermod -aG plugdev "${SERVICE_USER}"
-fi
+usermod -aG plugdev "${SERVICE_USER}"
 
 if [[ ! -f "${INSTALL_ROOT}/config.json" ]]; then
   cp "${INSTALL_ROOT}/config.example.json" "${INSTALL_ROOT}/config.json"
   echo "Created ${INSTALL_ROOT}/config.json from config.example.json — edit server.api_key and bind settings."
 fi
+
+chmod 755 "${INSTALL_ROOT}/refresh_udev_from_config.py"
+printf '%s\n' "${SERVICE_USER} ALL=(root) NOPASSWD: ${UDEV_PYTHON} ${INSTALL_ROOT}/refresh_udev_from_config.py" > "${SUDOERS_D}"
+chmod 440 "${SUDOERS_D}"
+if command -v visudo >/dev/null 2>&1; then
+  visudo -c -f "${SUDOERS_D}"
+fi
+"${UDEV_PYTHON}" "${INSTALL_ROOT}/refresh_udev_from_config.py"
+echo "Installed ${SUDOERS_D} and wrote udev rules (also refreshed at runtime when config is saved)."
 
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_ROOT}"
 
