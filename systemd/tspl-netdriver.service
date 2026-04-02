@@ -1,0 +1,21 @@
+# TSPL netdriver — installed to /etc/systemd/system/ by install-to-opt.sh in the repo root
+# Manual install: sudo cp …/systemd/tspl-netdriver.service /etc/systemd/system/
+# Then: sudo systemctl daemon-reload && sudo systemctl enable --now tspl-netdriver.service
+
+[Unit]
+Description=TSPL printer network driver (FastAPI + Uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=tspl
+Group=tspl
+WorkingDirectory=/opt/tspl-netdriver
+Environment=TSPL_DRIVER_CONFIG=/opt/tspl-netdriver/config.json
+ExecStart=/opt/tspl-netdriver/.venv/bin/tspl-driver --log info
+Restart=on-failure
+RestartSec=5
+SupplementaryGroups=plugdev
+
+[Install]
+WantedBy=multi-user.target

@@ -52,6 +52,24 @@ export TSPL_DRIVER_CONFIG=/path/to/config.json
 
 Open the printed bind address (default `http://127.0.0.1:8787`). Paste the API key in the UI and click **Store key**.
 
+## Install to `/opt` and systemd
+
+From a clone of this repository (requires **rsync**):
+
+```bash
+sudo ./install-to-opt.sh
+```
+
+This copies the tree to `/opt/tspl-netdriver` (excluding `.venv`, `.git`, `config.json`, caches), creates a system user **`tspl`** and a venv, runs **`pip install -e .`**, seeds **`config.json`** from the example if missing, installs **`systemd/tspl-netdriver.service`** into `/etc/systemd/system/`, and reloads systemd.
+
+**Overrides:** `TSPL_INSTALL_ROOT` (default `/opt/tspl-netdriver`), `TSPL_SERVICE_USER` (default `tspl`).
+
+Then:
+
+```bash
+sudo systemctl enable --now tspl-netdriver.service
+```
+
 ## Layout (Python packages)
 
 | Package        | Role |
