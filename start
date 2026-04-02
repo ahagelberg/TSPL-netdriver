@@ -3,7 +3,10 @@
 # Verbose logs: ./start --log debug
 set -euo pipefail
 cd "$(dirname "$0")"
-if [[ -x .venv/bin/python ]]; then
-  exec .venv/bin/python -m tspl_driver "$@"
+if [[ -x .venv/bin/tspl-driver ]]; then
+  exec .venv/bin/tspl-driver "$@"
 fi
-exec python3 -m tspl_driver "$@"
+if [[ -x .venv/bin/python ]]; then
+  exec .venv/bin/python __main__.py "$@"
+fi
+exec python3 __main__.py "$@"

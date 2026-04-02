@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TSPL driver</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body class="app-state--connecting">
+  <div id="connectionGate" class="connection-gate" aria-live="polite">
+    <div class="connection-gate__inner">
+      <h1 class="connection-gate__title">TSPL driver</h1>
+      <p class="connection-gate__lede">Enter the API key for this server. It is kept in this browser (local storage).</p>
+      <label class="field">
+        <span class="field__label">API key</span>
+        <div class="field__secret-row">
+          <input type="password" id="apiKeyInput" class="field__input field__input--secret" autocomplete="off" />
+          <button type="button" class="btn btn--secondary btn--reveal-secret" id="btnToggleApiKey" aria-pressed="false" aria-label="Show API key">Show</button>
+        </div>
+      </label>
+      <div class="connection-gate__actions">
+        <button type="button" id="btnConnect" class="btn">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="mainApp" class="main-app page">
+    <header class="top">
+      <h1 class="top__title">TSPL driver</h1>
+      <nav class="top__nav" aria-label="Tools">
+        <a href="/" class="top__nav-link">Print label</a>
+      </nav>
+    </header>
+    <section class="panel" id="panelServer">
+      <div class="panel__head">
+        <h2 class="panel__title">Server</h2>
+        <button type="button" id="btnSaveServer" class="btn">Save</button>
+      </div>
+      <div class="card__body card__body--flush">
+        <div class="card__grid card__grid--2">
+          <label class="field">
+            <span class="field__label">Bind address</span>
+            <input type="text" id="srvBind" class="field__input" />
+          </label>
+          <label class="field">
+            <span class="field__label">Port</span>
+            <input type="number" id="srvPort" class="field__input" min="1" max="65535" />
+          </label>
+        </div>
+        <label class="field">
+          <span class="field__label">Service API key</span>
+          <div class="field__secret-row">
+            <input type="password" id="srvApiKey" class="field__input field__input--secret" autocomplete="off" />
+            <button type="button" class="btn btn--secondary btn--reveal-secret" id="btnToggleSrvApiKey" aria-pressed="false" aria-label="Show service API key">Show</button>
+          </div>
+        </label>
+        <details class="panel__advanced">
+          <summary class="panel__advanced-summary">Advanced (browser / CORS)</summary>
+          <div class="panel__advanced-body">
+            <p class="panel__advanced-lede">Allowed <code>Origin</code> values for cross-origin browser clients (e.g. WordPress admin calling this API). One origin per line. Restart the TSPL process after saving so CORS changes apply.</p>
+            <label class="field">
+              <span class="field__label">CORS allowed origins</span>
+              <textarea id="srvCorsOrigins" class="field__input field__input--code panel__advanced-textarea" rows="6" spellcheck="false" placeholder="https://example.com"></textarea>
+            </label>
+            <div class="card__grid card__grid--2">
+              <label class="field">
+                <span class="field__label">Font cache dir</span>
+                <input type="text" id="srvFontCacheDir" class="field__input" placeholder=".tspl-font-cache" />
+              </label>
+              <label class="field">
+                <span class="field__label">Web font fetch timeout (seconds)</span>
+                <input type="number" id="srvFontFetchTimeout" class="field__input" min="0.1" max="120" step="0.1" />
+              </label>
+            </div>
+            <label class="field">
+              <span class="field__label">Allowed local font roots (optional, one path per line)</span>
+              <textarea id="srvFontLocalRoots" class="field__input field__input--code panel__advanced-textarea" rows="4" spellcheck="false" placeholder="/usr/share/fonts&#10;./fonts"></textarea>
+            </label>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="panel" id="panelSizes">
+      <div class="panel__head">
+        <h2 class="panel__title">Label sizes</h2>
+        <button type="button" id="btnAddSize" class="btn btn--secondary">Add label size</button>
+      </div>
+      <div id="listSizes" class="accordion-list"></div>
+    </section>
+
+    <section class="panel" id="panelTemplates">
+      <div class="panel__head">
+        <h2 class="panel__title">Templates</h2>
+        <div class="panel__head-actions">
+          <button type="button" id="btnOpenBitmapHelper" class="btn btn--secondary">Bitmap helper…</button>
+          <button type="button" id="btnAddTpl" class="btn btn--secondary">Add template</button>
+        </div>
+      </div>
+      <div id="listTemplates" class="accordion-list" aria-live="polite"></div>
+    </section>
+
+    <section class="panel" id="panelPrinters">
+      <div class="panel__head">
+        <h2 class="panel__title">Printers</h2>
+        <button type="button" id="btnAddPrinter" class="btn btn--secondary">Add printer</button>
+      </div>
+      <div id="listPrinters" class="accordion-list"></div>
+    </section>
+
+    <section class="panel panel--debug" id="panelDebug" aria-labelledby="debugPanelTitle">
+      <div class="panel__head">
+        <h2 class="panel__title" id="debugPanelTitle">TSPL debug</h2>
+      </div>
+      <div class="card__body debug-panel__body">
+        <p class="panel__lede debug-panel__lede">Advanced: send raw printer commands for testing. Use line breaks as in your printer manual.</p>
+        <label class="field">
+          <span class="field__label">Printer</span>
+          <select id="debugPrinterSelect" class="field__select"></select>
+        </label>
+        <label class="field">
+          <span class="field__label">TSPL commands</span>
+          <textarea id="debugTsplInput" class="field__input field__input--code debug-panel__textarea" rows="14" spellcheck="false" placeholder="SIZE 50 mm,30 mm&#10;GAP 2 mm,0 mm&#10;CLS&#10;TEXT 40,40,&quot;3&quot;,0,1,1,&quot;Hello&quot;&#10;PRINT 1,1"></textarea>
+        </label>
+        <div class="debug-panel__actions">
+          <button type="button" id="btnDebugSend" class="btn">Send to printer</button>
+        </div>
+      </div>
+    </section>
+
+    <div id="bitmapHelperModal" class="modal is-hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="bitmapHelperModalTitle">
+    <button type="button" class="modal__backdrop" id="bitmapHelperBackdrop" aria-label="Close bitmap helper"></button>
+    <div class="modal__box modal__box--bitmap-helper">
+      <div class="modal__head">
+        <h2 class="modal__title" id="bitmapHelperModalTitle">Bitmap helper</h2>
+        <button type="button" class="btn btn--secondary modal__close" id="btnCloseBitmapHelper" aria-label="Close">Close</button>
+      </div>
+      <div class="template-bitmap-helper card__body card__body--flush">
+        <p class="field__hint">Pick a printer for <strong>resolution (dpi)</strong>, set the printed <strong>size in mm</strong>, <strong>scaling</strong> (fit is default), <strong>dithering</strong>, then upload an image. Output matches the server <code>type: "bitmap"</code> payload. Copy into <code>elements</code> and set <code>x</code> / <code>y</code> (mm).</p>
+        <div class="template-bitmap-helper__options card__grid card__grid--2">
+          <label class="field">
+            <span class="field__label">Printer (dpi)</span>
+            <select id="bitmapHelperPrinter" class="field__select"></select>
+            <span class="field__hint">Selected: <span id="bitmapHelperDpiDisplay">—</span> (from config; new printers default to 203 dpi).</span>
+          </label>
+          <label class="field">
+            <span class="field__label">Dithering</span>
+            <select id="bitmapHelperDither" class="field__select">
+              <option value="threshold">Threshold (128)</option>
+              <option value="floydsteinberg">Floyd–Steinberg</option>
+              <option value="ordered4">Ordered (Bayer 4×4)</option>
+              <option value="ordered8">Ordered (Bayer 8×8)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field__label">Width (mm)</span>
+            <input type="number" id="bitmapHelperWidthMm" class="field__input" min="0.1" max="500" step="0.1" value="40" />
+          </label>
+          <label class="field">
+            <span class="field__label">Height (mm)</span>
+            <input type="number" id="bitmapHelperHeightMm" class="field__input" min="0.1" max="500" step="0.1" value="30" />
+          </label>
+          <label class="field">
+            <span class="field__label">Scaling</span>
+            <select id="bitmapHelperScaleMode" class="field__select">
+              <option value="fit" selected>Fit (uniform, letterbox)</option>
+              <option value="stretch">Stretch to fill</option>
+            </select>
+            <span class="field__hint"><strong>Fit</strong> keeps aspect ratio inside the mm box. <strong>Stretch</strong> distorts to fill it.</span>
+          </label>
+        </div>
+        <div class="template-bitmap-helper__actions">
+          <label class="field field--inline-file">
+            <span class="field__label">Image file</span>
+            <input type="file" id="bitmapHelperFile" accept="image/*" class="template-bitmap-helper__file" />
+          </label>
+          <button type="button" id="btnBitmapHelperCopyJson" class="btn btn--secondary">Copy element JSON</button>
+          <button type="button" id="btnBitmapHelperCopyB64" class="btn btn--secondary">Copy base64 only</button>
+        </div>
+        <label class="field">
+          <span class="field__label">Output</span>
+          <textarea id="bitmapHelperOutput" class="field__input field__input--code template-bitmap-helper__output" readonly rows="8" spellcheck="false" placeholder="Choose an image to generate the bitmap payload."></textarea>
+        </label>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <script src="/static/toast.js"></script>
+  <script src="/static/api.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

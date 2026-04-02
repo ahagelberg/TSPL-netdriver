@@ -7,11 +7,12 @@ import logging
 
 import usb.core
 
-from tspl_driver.models import PrinterConfig
-from tspl_driver.runtime_log import LOGGER_NAME
-from tspl_driver.usb_bulk import UsbBulkDeviceNotFoundError, write_tspl_usb_bulk
+from config.models import PrinterConfig
+from app_logging.runtime_log import LOGGER_NAME
+from usb_access.bulk import UsbBulkDeviceNotFoundError, write_tspl_usb_bulk
+from usb_access.discover import UsbDeviceEntry, list_usb_devices, name_suggests_tspl_printer
 
-_log = logging.getLogger(f"{LOGGER_NAME}.print_usb")
+_log = logging.getLogger(f"{LOGGER_NAME}.usb_access.subsystem")
 
 # Cap debug log size so a huge job does not flood stderr.
 TSPL_DEBUG_LOG_MAX_CHARS = 65536
@@ -69,3 +70,18 @@ def send_tspl_to_printer(printer: PrinterConfig, payload: bytes) -> None:
         ) from e
     except usb.core.USBError as e:
         raise OSError(errno.EIO, f"USB bulk write failed: {e}") from e
+
+
+class UsbSubsystem:
+    """Coordinates USB discovery (udev) and TSPL bulk OUT (libusb)."""
+
+    def discover_devices(self, *, show_all: bool) -> tuple[list[UsbDeviceEntry], int, int]:
+        all_devices = list_usb_devices()
+        name_matched = [
+            x for x in all_devices if name_suggests_tspl_printer(x.manufacturer, x.product)
+        ]
+        listed = all_devices if show_all else name_matched
+        return listed, len(all_devices), len(name_matched)
+
+    def send_tspl(self, printer: PrinterConfig, payload: bytes) -> None:
+        send_tspl_to_printer(printer, payload)

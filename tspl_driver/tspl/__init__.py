@@ -1,1 +1,0 @@
-"""TSPL byte generation."""

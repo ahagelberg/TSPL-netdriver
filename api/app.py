@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import secrets
-import shutil
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -18,34 +18,28 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.cors import CORSMiddleware, SAFELISTED_HEADERS
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from tspl_driver.api_schemas import (
+from api.schemas import (
     ErrEnvelope,
+    LabelPrintBody,
     OkEnvelope,
     RawPrintBody,
+    TemplatePreviewBody,
     TemplatePrintBody,
     TemplateTestBody,
     UsbDiscoverData,
     UsbDiscoverDevice,
 )
-from tspl_driver.config_store import load_config, save_config_atomic
-from tspl_driver.models import AppConfig
-from tspl_driver.print_usb import PrinterDeviceNotFoundError, send_tspl_to_printer
-from tspl_driver.state import get_config, get_config_path, init_state
-from tspl_driver.template_render import get_label_size, render_template_tspl
-from tspl_driver.tspl.builder import build_test_label_tspl
-from tspl_driver.runtime_log import LOGGER_NAME, append_exception_fields
-from tspl_driver.usb_discover import list_usb_devices, name_suggests_tspl_printer
+from config.config_store import bootstrap_config, save_config_atomic
+from config.models import AppConfig, LabelSize
+from usb_access.subsystem import PrinterDeviceNotFoundError, UsbSubsystem
+from app_logging.runtime_log import LOGGER_NAME, append_exception_fields
+from printer.print_service import PrintService
+from config.state import get_config, get_config_path
+from printer.renderer import ensure_font_cache_dir
 
 API_PREFIX = "/api/v1"
 logger = logging.getLogger(LOGGER_NAME)
-STATIC_DIR = Path(__file__).resolve().parent / "static"
-
-APP_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = APP_DIR.parent
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
-EXAMPLE_CONFIG_PATH = APP_DIR / "config.example.json"
-if not EXAMPLE_CONFIG_PATH.is_file():
-    EXAMPLE_CONFIG_PATH = PROJECT_ROOT / "config.example.json"
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
 def _json_err(
@@ -59,6 +53,18 @@ def _json_err(
     append_exception_fields(err, exc)
     body = ErrEnvelope(error=err).model_dump()
     return JSONResponse(content=body, status_code=status)
+
+
+def _validation_error_summary(exc: RequestValidationError) -> str:
+    """Human-readable message from FastAPI/Pydantic validation errors."""
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = err.get("loc") or ()
+        loc_bits = [str(x) for x in loc if x not in ("body", "query", "path", "header")]
+        loc_s = ".".join(loc_bits)
+        msg = err.get("msg") or "invalid"
+        parts.append(f"{loc_s}: {msg}" if loc_s else msg)
+    return "; ".join(parts) if parts else "Validation failed"
 
 
 # CORS preflight and browser cross-origin API calls (WordPress admin JS, etc.).
@@ -337,7 +343,7 @@ def create_app() -> FastAPI:
         logger.warning("request validation failed: %s", exc.errors())
         return _json_err(
             "validation_error",
-            exc.errors().__repr__(),
+            _validation_error_summary(exc),
             422,
             exc=exc,
         )
@@ -349,14 +355,52 @@ def create_app() -> FastAPI:
                 content={"ok": False, "error": exc.detail},
                 status_code=exc.status_code,
             )
+        if isinstance(exc.detail, list):
+            return _json_err(
+                "http_error",
+                "; ".join(str(x) for x in exc.detail) or "Request failed",
+                exc.status_code,
+            )
         return _json_err("http_error", str(exc.detail), exc.status_code)
 
-    @app.get("/")
-    async def index() -> FileResponse:
-        index_path = STATIC_DIR / "index.html"
-        if not index_path.is_file():
+    @app.exception_handler(Exception)
+    async def unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("unhandled API error")
+        return _json_err(
+            "internal_error",
+            str(exc) or "Internal server error",
+            500,
+            exc=exc,
+        )
+
+    def _ui_file_response(filename: str) -> FileResponse:
+        path = STATIC_DIR / filename
+        if not path.is_file():
             raise HTTPException(status_code=404, detail="UI not found")
-        return FileResponse(index_path)
+        return FileResponse(path)
+
+    @app.get("/")
+    async def root_print_page() -> FileResponse:
+        """Label printing UI (default landing page)."""
+        return _ui_file_response("print.html")
+
+    @app.get("/config.html")
+    async def config_page() -> FileResponse:
+        """Printer / template configuration UI."""
+        return _ui_file_response("index.html")
+
+    @app.get("/favicon.ico")
+    async def favicon() -> FileResponse:
+        """Browsers request /favicon.ico by default; static files live under /static/."""
+        path = STATIC_DIR / "favicon.svg"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Favicon not found")
+        return FileResponse(path, media_type="image/svg+xml")
+
+    @app.get("/print.html")
+    async def print_page_alias() -> FileResponse:
+        """Same UI as ``GET /`` (bookmark compatibility)."""
+        return _ui_file_response("print.html")
 
     v1 = APIRouter(prefix=API_PREFIX, dependencies=[Depends(verify_api_key)])
 
@@ -371,19 +415,33 @@ def create_app() -> FastAPI:
     @v1.put("/config")
     async def write_config(body: AppConfig) -> dict:
         path = get_config_path()
-        save_config_atomic(path, body)
+        try:
+            ensure_font_cache_dir(body.server, path)
+            save_config_atomic(path, body)
+        except OSError as e:
+            logger.error("config save failed: %s", e)
+            return _json_err(
+                "io_error",
+                str(e) or "Could not save configuration file",
+                500,
+                exc=e,
+            )
         return OkEnvelope(data=body.model_dump(mode="json")).model_dump()
+
+    @v1.get("/templates/{template_id}")
+    async def get_template(template_id: str) -> dict:
+        cfg = get_config()
+        tpl = next((t for t in cfg.templates if t.id == template_id), None)
+        if tpl is None:
+            return _json_err("not_found", f"Unknown template {template_id!r}", 404)
+        return OkEnvelope(data=tpl.model_dump(mode="json")).model_dump()
 
     @v1.get("/usb/discover")
     async def usb_discover(show_all: bool = False) -> dict:
         logger.debug("usb/discover show_all=%s", show_all)
-        all_devices = list_usb_devices()
-        name_matched = [
-            x
-            for x in all_devices
-            if name_suggests_tspl_printer(x.manufacturer, x.product)
-        ]
-        listed = all_devices if show_all else name_matched
+        listed, usb_total, tspl_like_count = UsbSubsystem().discover_devices(
+            show_all=show_all
+        )
         rows = [
             UsbDiscoverDevice(
                 device_key=x.device_key,
@@ -399,37 +457,80 @@ def create_app() -> FastAPI:
         ]
         payload = UsbDiscoverData(
             devices=rows,
-            usb_total=len(all_devices),
-            tspl_like_count=len(name_matched),
+            usb_total=usb_total,
+            tspl_like_count=tspl_like_count,
         )
         return OkEnvelope(data=payload.model_dump(mode="json")).model_dump()
 
     @v1.post("/print/template")
     async def print_template(body: TemplatePrintBody) -> dict:
         cfg = get_config()
-        tpl = next((t for t in cfg.templates if t.id == body.template_id), None)
-        if tpl is None:
-            return _json_err("not_found", f"Unknown template {body.template_id!r}", 404)
-        pr = next((p for p in cfg.printers if p.id == body.printer_id), None)
-        if pr is None:
-            return _json_err("not_found", f"Unknown printer {body.printer_id!r}", 404)
         try:
             logger.debug(
                 "print/template template_id=%s printer_id=%s",
                 body.template_id,
                 body.printer_id,
             )
-            ls = get_label_size(cfg, tpl.label_size_id)
-            merged_data = {**tpl.test_data, **body.data}
-            payload = render_template_tspl(tpl, ls, pr, merged_data)
-            logger.debug("print/template %d bytes printer_id=%s", len(payload), body.printer_id)
-            send_tspl_to_printer(pr, payload)
+            nbytes = PrintService().print_template_job(
+                cfg,
+                template_id=body.template_id,
+                printer_id=body.printer_id,
+                data=body.data,
+            )
+            logger.debug(
+                "print/template %d bytes printer_id=%s",
+                nbytes,
+                body.printer_id,
+            )
         except ValueError as e:
+            msg = str(e)
+            if msg.startswith("Unknown template ") or msg.startswith("Unknown printer "):
+                return _json_err("not_found", msg, 404, exc=e)
             logger.warning("template render failed: %s", e)
-            return _json_err("render_error", str(e), 422, exc=e)
+            return _json_err("render_error", msg, 422, exc=e)
         except KeyError as e:
             logger.warning("missing key: %s", e)
             return _json_err("not_found", str(e), 404, exc=e)
+        except RuntimeError as e:
+            logger.warning("template render runtime failed: %s", e)
+            return _json_err("render_error", str(e), 422, exc=e)
+        except PrinterDeviceNotFoundError as e:
+            logger.error("device not found: %s", e)
+            return _json_err("device_not_found", str(e), 503, exc=e)
+        except OSError as e:
+            logger.error("I/O error writing to printer: %s", e)
+            return _json_err("io_error", str(e), 503, exc=e)
+        return OkEnvelope(data={"printed": True}).model_dump()
+
+    @v1.post("/print/label")
+    async def print_label(body: LabelPrintBody) -> dict:
+        cfg = get_config()
+        try:
+            logger.debug("print/label printer_id=%s", body.printer_id)
+            ls = LabelSize(
+                id="inline-label-size",
+                name="Inline label size",
+                width=body.label_size.width,
+                height=body.label_size.height,
+                gap=body.label_size.gap,
+            )
+            nbytes = PrintService().print_inline_label(
+                cfg,
+                printer_id=body.printer_id,
+                label_size=ls,
+                elements=body.elements,
+                data=body.data,
+            )
+            logger.debug("print/label %d bytes printer_id=%s", nbytes, body.printer_id)
+        except ValueError as e:
+            msg = str(e)
+            if msg.startswith("Unknown printer "):
+                return _json_err("not_found", msg, 404, exc=e)
+            logger.warning("inline label render failed: %s", e)
+            return _json_err("render_error", msg, 422, exc=e)
+        except RuntimeError as e:
+            logger.warning("inline label runtime failed: %s", e)
+            return _json_err("render_error", str(e), 422, exc=e)
         except PrinterDeviceNotFoundError as e:
             logger.error("device not found: %s", e)
             return _json_err("device_not_found", str(e), 503, exc=e)
@@ -448,7 +549,7 @@ def create_app() -> FastAPI:
             logger.debug("print/raw printer_id=%s", body.printer_id)
             raw = body.tspl.encode(pr.text_encoding, errors="replace")
             logger.debug("print/raw %d bytes", len(raw))
-            send_tspl_to_printer(pr, raw)
+            UsbSubsystem().send_tspl(pr, raw)
         except PrinterDeviceNotFoundError as e:
             logger.error("device not found: %s", e)
             return _json_err("device_not_found", str(e), 503, exc=e)
@@ -460,33 +561,69 @@ def create_app() -> FastAPI:
     @v1.post("/printers/{printer_id}/test")
     async def printer_test(printer_id: str) -> dict:
         cfg = get_config()
-        pr = next((p for p in cfg.printers if p.id == printer_id), None)
-        if pr is None:
-            return _json_err("not_found", f"Unknown printer {printer_id!r}", 404)
         try:
-            ls = get_label_size(cfg, pr.default_label_size_id)
-        except KeyError as e:
-            logger.warning("printer test: missing label size: %s", e)
+            logger.debug("printer test printer_id=%s", printer_id)
+            nbytes = PrintService().print_printer_test(cfg, printer_id=printer_id)
+            logger.debug("printer test %d bytes printer_id=%s", nbytes, printer_id)
+        except ValueError as e:
+            msg = str(e)
+            if msg.startswith("Unknown printer "):
+                return _json_err("not_found", msg, 404, exc=e)
+            logger.warning("printer test failed: %s", e)
+            return _json_err("render_error", msg, 422, exc=e)
+        except KeyError:
+            logger.warning(
+                "printer test: missing label size for printer %r",
+                printer_id,
+            )
             return _json_err(
                 "config_error",
                 f"Printer default label size missing for {printer_id!r}",
                 422,
-                exc=e,
             )
+        except PrinterDeviceNotFoundError as e:
+            logger.error("device not found: %s", e)
+            return _json_err("device_not_found", str(e), 503, exc=e)
+        except OSError as e:
+            logger.error("I/O error writing to printer: %s", e)
+            return _json_err("io_error", str(e), 503, exc=e)
+        except RuntimeError as e:
+            logger.warning("printer test runtime failed: %s", e)
+            return _json_err("render_error", str(e), 422, exc=e)
+        return OkEnvelope(data={"tested": True}).model_dump()
+
+    @v1.post("/templates/{template_id}/test")
+    async def template_test(template_id: str, body: TemplateTestBody) -> dict:
+        cfg = get_config()
         try:
-            logger.debug("printer test printer_id=%s", printer_id)
-            payload = build_test_label_tspl(
-                width_mm=ls.width_mm,
-                height_mm=ls.height_mm,
-                gap_mm=ls.gap_mm,
-                dpi=pr.dpi,
-                direction=pr.direction,
-                offset_x_mm=pr.offset_x_mm,
-                offset_y_mm=pr.offset_y_mm,
-                text_encoding=pr.text_encoding,
+            logger.debug(
+                "template test template_id=%s printer_id=%s",
+                template_id,
+                body.printer_id,
             )
-            logger.debug("printer test %d bytes printer_id=%s", len(payload), printer_id)
-            send_tspl_to_printer(pr, payload)
+            nbytes = PrintService().print_template_test(
+                cfg,
+                template_id=template_id,
+                printer_id=body.printer_id,
+                data=body.data,
+            )
+            logger.debug(
+                "template test %d bytes printer_id=%s",
+                nbytes,
+                body.printer_id,
+            )
+        except ValueError as e:
+            msg = str(e)
+            if msg.startswith("Unknown template ") or msg.startswith("Unknown printer "):
+                return _json_err("not_found", msg, 404, exc=e)
+            logger.warning("template test render failed: %s", e)
+            return _json_err("render_error", msg, 422, exc=e)
+        except KeyError as e:
+            logger.warning("template test missing key: %s", e)
+            return _json_err("not_found", str(e), 404, exc=e)
+        except RuntimeError as e:
+            logger.warning("template test runtime failed: %s", e)
+            return _json_err("render_error", str(e), 422, exc=e)
         except PrinterDeviceNotFoundError as e:
             logger.error("device not found: %s", e)
             return _json_err("device_not_found", str(e), 503, exc=e)
@@ -495,39 +632,36 @@ def create_app() -> FastAPI:
             return _json_err("io_error", str(e), 503, exc=e)
         return OkEnvelope(data={"tested": True}).model_dump()
 
-    @v1.post("/templates/{template_id}/test")
-    async def template_test(template_id: str, body: TemplateTestBody) -> dict:
+    @v1.post("/preview/template")
+    async def template_preview_png(body: TemplatePreviewBody) -> Response:
         cfg = get_config()
-        tpl = next((t for t in cfg.templates if t.id == template_id), None)
-        if tpl is None:
-            return _json_err("not_found", f"Unknown template {template_id!r}", 404)
-        pr = next((p for p in cfg.printers if p.id == body.printer_id), None)
-        if pr is None:
-            return _json_err("not_found", f"Unknown printer {body.printer_id!r}", 404)
         try:
-            logger.debug(
-                "template test template_id=%s printer_id=%s",
-                template_id,
-                body.printer_id,
+            png = PrintService().preview_template_png(
+                cfg,
+                printer_id=body.printer_id,
+                label_size_id=body.label_size_id,
+                elements=body.elements,
+                test_data=body.test_data,
+                data=body.data,
             )
-            ls = get_label_size(cfg, tpl.label_size_id)
-            merged_data = {**tpl.test_data, **body.data}
-            payload = render_template_tspl(tpl, ls, pr, merged_data)
-            logger.debug("template test %d bytes printer_id=%s", len(payload), body.printer_id)
-            send_tspl_to_printer(pr, payload)
         except ValueError as e:
-            logger.warning("template test render failed: %s", e)
-            return _json_err("render_error", str(e), 422, exc=e)
+            msg = str(e)
+            if msg.startswith("Unknown printer "):
+                return _json_err("not_found", msg, 404, exc=e)
+            logger.warning("template preview render failed: %s", e)
+            return _json_err("render_error", msg, 422, exc=e)
         except KeyError as e:
-            logger.warning("template test missing key: %s", e)
-            return _json_err("not_found", str(e), 404, exc=e)
-        except PrinterDeviceNotFoundError as e:
-            logger.error("device not found: %s", e)
-            return _json_err("device_not_found", str(e), 503, exc=e)
-        except OSError as e:
-            logger.error("I/O error writing to printer: %s", e)
-            return _json_err("io_error", str(e), 503, exc=e)
-        return OkEnvelope(data={"tested": True}).model_dump()
+            lid = e.args[0] if e.args else str(e)
+            logger.warning("template preview: unknown label size %r", lid)
+            return _json_err("not_found", f"Unknown label size {lid!r}", 404, exc=e)
+        except RuntimeError as e:
+            logger.warning("template preview runtime failed: %s", e)
+            return _json_err("render_error", str(e), 422, exc=e)
+        return Response(
+            content=png,
+            media_type="image/png",
+            headers={"Cache-Control": "no-store"},
+        )
 
     # Preflight must succeed without API key. Headers are set here too: middleware alone
     # does not always merge Access-Control-* onto this 204 (e.g. some OPTIONS paths).
@@ -550,18 +684,66 @@ def create_app() -> FastAPI:
     return app
 
 
-def bootstrap_config() -> tuple[Path, AppConfig]:
-    path_str = os.environ.get("TSPL_DRIVER_CONFIG", str(DEFAULT_CONFIG_PATH))
-    path = Path(path_str).resolve()
-    if not path.exists():
-        if not EXAMPLE_CONFIG_PATH.is_file():
-            raise FileNotFoundError(f"Missing {EXAMPLE_CONFIG_PATH}")
-        shutil.copy(EXAMPLE_CONFIG_PATH, path)
-    cfg = load_config(path)
-    init_state(path)
-    return path, cfg
-
-
 def get_app() -> FastAPI:
     """Uvicorn factory."""
     return create_app()
+
+
+def _parse_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="TSPL network driver (FastAPI + Uvicorn).",
+    )
+    parser.add_argument(
+        "--log",
+        metavar="LEVEL",
+        nargs="?",
+        const="debug",
+        choices=("debug", "info", "warning", "error"),
+        default=None,
+        help=(
+            "Log to stderr for the driver and uvicorn. "
+            "LEVEL: debug, info, warning, error. "
+            "If --log is given with no value, debug is used."
+        ),
+    )
+    return parser.parse_args()
+
+
+def run() -> None:
+    """Console script entry (`tspl-driver`) and `python -m` when wired via __main__."""
+    import logging
+
+    import uvicorn
+
+    from app_logging.runtime_log import configure_logging
+
+    args = _parse_cli_args()
+    if args.log is not None:
+        configure_logging(args.log)
+
+    path, cfg = bootstrap_config()
+    log = logging.getLogger(LOGGER_NAME)
+    cors_raw = list(cfg.server.cors_origins or [])
+    cors_eff = _normalize_cors_origins(cors_raw)
+    log.info(
+        "loaded config %s, listening on %s:%s",
+        path,
+        cfg.server.bind_address,
+        cfg.server.port,
+    )
+    log.info(
+        "CORS server.cors_origins raw=%s — effective count=%s (first entries %s)",
+        cors_raw,
+        len(cors_eff),
+        cors_eff[:8],
+    )
+
+    run_kw: dict = {
+        "factory": True,
+        "host": cfg.server.bind_address,
+        "port": cfg.server.port,
+    }
+    if args.log is not None:
+        run_kw["log_level"] = args.log
+
+    uvicorn.run(get_app, **run_kw)

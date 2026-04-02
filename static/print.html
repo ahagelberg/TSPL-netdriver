@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Print label — TSPL driver</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body class="app-state--connecting">
+  <div id="connectionGate" class="connection-gate" aria-live="polite">
+    <div class="connection-gate__inner">
+      <h1 class="connection-gate__title">Print label</h1>
+      <p class="connection-gate__lede">Enter the API key for this server. It is kept in this browser (local storage).</p>
+      <label class="field">
+        <span class="field__label">API key</span>
+        <div class="field__secret-row">
+          <input type="password" id="printApiKey" class="field__input field__input--secret" autocomplete="off" />
+          <button type="button" class="btn btn--secondary btn--reveal-secret" id="printBtnToggleKey" aria-pressed="false" aria-label="Show API key">Show</button>
+        </div>
+      </label>
+      <div class="connection-gate__actions">
+        <button type="button" id="printBtnConnect" class="btn">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="mainApp" class="main-app page print-page">
+    <header class="top">
+      <h1 class="top__title">Print label</h1>
+      <nav class="top__nav" aria-label="Navigation">
+        <a href="/config.html" class="top__nav-link">Configuration</a>
+      </nav>
+    </header>
+    <section class="panel print-page__panel">
+      <div class="panel__head">
+        <h2 class="panel__title">Print job</h2>
+      </div>
+      <p class="panel__lede print-page__lede">Choose a template and printer, then fill the fields that appear for your template. <strong>Template, printer, and field values</strong> are remembered for this tab (session storage) until you close the tab.</p>
+      <div class="print-page__job-grid">
+        <label class="field">
+          <span class="field__label">Template</span>
+          <select id="printTemplateSelect" class="field__select"></select>
+        </label>
+        <label class="field">
+          <span class="field__label">Printer</span>
+          <select id="printPrinterSelect" class="field__select"></select>
+        </label>
+      </div>
+      <p id="printDefaultHint" class="print-page__hint" aria-live="polite"></p>
+      <p id="printTemplateMeta" class="print-page__meta" aria-live="polite"></p>
+
+      <div class="print-page__data-section">
+        <h3 class="print-page__data-heading">Template data</h3>
+        <p id="printDataEmpty" class="print-page__data-empty is-hidden">This template has no placeholders. You can print as-is.</p>
+        <div id="printPlaceholderFields" class="print-page__placeholders"></div>
+      </div>
+
+      <div class="print-page__actions">
+        <button type="button" id="printPreviewBtn" class="btn btn--secondary">Preview</button>
+        <button type="button" id="printSubmit" class="btn">Print</button>
+      </div>
+
+      <div class="print-page__preview-area" id="printPreviewArea">
+        <h3 class="print-page__data-heading">Preview</h3>
+        <p class="field__hint print-page__preview-hint">Renders the same raster as printing (PNG). Requires a valid API key (stored in this browser).</p>
+        <div class="template-preview__frame" id="printPreviewFrame">
+          <img id="printPreviewImg" class="template-preview__img" alt="Label preview" />
+          <p id="printPreviewPlaceholder" class="template-preview__placeholder">Click Preview to generate.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script src="/static/toast.js"></script>
+  <script src="/static/api.js"></script>
+  <script src="/static/print-page.js"></script>
+</body>
+</html>

@@ -9,19 +9,60 @@ Small **FastAPI** service: JSON configuration, API key, USB **TSPL** label print
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e .
-cp tspl_driver/config.example.json config.json
+cp config.example.json config.json
 # Edit config.json — set server.api_key and bind_address/port as needed.
 ```
 
+Run **`pip install -e .`** again after `git pull` whenever packages or `[tool.setuptools]` in `pyproject.toml` change (new folders under the project root). Otherwise the `tspl-driver` console script may fail with `ModuleNotFoundError` for a package that exists on disk.
+
 ## Run
 
+From the repository root:
+
 ```bash
-.venv/bin/python -m tspl_driver
+./start
 ```
 
-Or set `TSPL_DRIVER_CONFIG` to an absolute path for the JSON config file.
+Verbose logging to stderr (driver + uvicorn):
+
+```bash
+./start --log debug
+```
+
+Or invoke the installed entry point directly:
+
+```bash
+.venv/bin/tspl-driver
+.venv/bin/tspl-driver --log debug
+```
+
+Or run without going through the console script (adds the repo root to `sys.path`):
+
+```bash
+.venv/bin/python __main__.py
+.venv/bin/python __main__.py --log debug
+```
+
+**Config file path:** By default the service reads `./config.json` next to the process working directory. Override with an absolute path:
+
+```bash
+export TSPL_DRIVER_CONFIG=/path/to/config.json
+./start
+```
 
 Open the printed bind address (default `http://127.0.0.1:8787`). Paste the API key in the UI and click **Store key**.
+
+## Layout (Python packages)
+
+| Package        | Role |
+|----------------|------|
+| `api`          | FastAPI app, JSON schemas, CLI entry (`run`) |
+| `config`       | Pydantic models for `config.json`, load/save, process-wide config path |
+| `printer`      | TSPL building, rendering, template/print orchestration |
+| `usb_access`   | USB discovery (udev) and TSPL over USB bulk OUT (PyUSB) |
+| `app_logging`  | Shared logger name and `--log` / JSON error diagnostics |
+
+Root modules include `main` (re-exports `api.app` for compatibility).
 
 ## API
 

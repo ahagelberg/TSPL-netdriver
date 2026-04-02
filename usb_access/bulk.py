@@ -9,11 +9,11 @@ from typing import Any, cast
 import usb.core
 import usb.util
 
-from tspl_driver.runtime_log import LOGGER_NAME
-from tspl_driver.usb_discover import usb_serial_matches
-from tspl_driver.usb_topology import linux_usb_sys_name_from_pyusb
+from app_logging.runtime_log import LOGGER_NAME
+from usb_access.discover import usb_serial_matches
+from usb_access.topology import linux_usb_sys_name_from_pyusb
 
-_log = logging.getLogger(f"{LOGGER_NAME}.usb_bulk")
+_log = logging.getLogger(f"{LOGGER_NAME}.usb_access.bulk")
 
 # Max bytes per usb_bulk write (stay below typical 16 KiB high-speed limits).
 USB_BULK_CHUNK_BYTES = 8192

@@ -5,8 +5,8 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from tspl_driver.config_store import load_config
-from tspl_driver.models import AppConfig
+from .config_store import load_config
+from .models import AppConfig
 
 _lock = threading.Lock()
 _config_path: Path | None = None

@@ -1,4 +1,4 @@
-"""Build TSPL command strings: SIZE, GAP, DIRECTION, REFERENCE, TEXT, PRINT."""
+"""Build TSPL command strings: SIZE, GAP, DIRECTION, REFERENCE, TEXT, BOX, BITMAP, PRINT."""
 
 from __future__ import annotations
 
@@ -14,6 +14,12 @@ TSPL_TEXT_ROTATION = 0
 MM_PER_INCH = 25.4
 # TSPL BOX fifth parameter is line thickness in dots; must not be 0.
 TSPL_BOX_LINE_MIN_DOTS = 1
+TSPL_BITMAP_MODE_OVERWRITE = 0
+TSPL_BITMAP_MODE_OR = 1
+TSPL_BITMAP_MODE_XOR = 2
+TSPL_BITMAP_MODE_AND = 3
+# Monochrome bitmap packing: MSB-first per byte; unset bits must be paper (see pack_mono_bitmap_rows).
+BITMAP_BITS_PER_BYTE = 8
 # Test label: TEXT position from label origin (mm).
 TEST_LABEL_MARGIN_MM = 2.0
 
@@ -40,22 +46,22 @@ def line_width_mm_to_box_dots(line_width_mm: float, dpi: int) -> int:
 
 def build_label_preamble(
     *,
-    width_mm: float,
-    height_mm: float,
-    gap_mm: float,
+    width: float,
+    height: float,
+    gap: float,
     dpi: int,
     direction: int,
-    offset_x_mm: float,
-    offset_y_mm: float,
+    offset_x: float,
+    offset_y: float,
 ) -> str:
-    """Opening commands before content (CLS, SIZE, GAP, DIRECTION, REFERENCE)."""
-    off_x = mm_to_dots(offset_x_mm, dpi)
-    off_y = mm_to_dots(offset_y_mm, dpi)
+    """Opening commands before content (CLS, SIZE, GAP, DIRECTION, REFERENCE). Millimetres."""
+    off_x = mm_to_dots(offset_x, dpi)
+    off_y = mm_to_dots(offset_y, dpi)
     if direction not in (TSPL_DIRECTION_DEFAULT, TSPL_DIRECTION_180):
         direction = TSPL_DIRECTION_DEFAULT
-    w_mm = _format_mm_for_tspl(width_mm)
-    h_mm = _format_mm_for_tspl(height_mm)
-    g_mm = _format_mm_for_tspl(gap_mm)
+    w_mm = _format_mm_for_tspl(width)
+    h_mm = _format_mm_for_tspl(height)
+    g_mm = _format_mm_for_tspl(gap)
     lines = [
         "CLS",
         f"SIZE {w_mm} mm,{h_mm} mm",
@@ -113,30 +119,88 @@ def build_box_command(
     return f"BOX {x_lo},{y_lo},{x_hi},{y_hi},{lw}\r\n".encode("ascii")
 
 
+def build_circle_command(
+    x_dots: int,
+    y_dots: int,
+    diameter_dots: int,
+    thickness_dots: int,
+) -> bytes:
+    """TSPL CIRCLE: upper-left of bounding box, diameter and line thickness in dots."""
+    d = max(1, int(diameter_dots))
+    t = max(1, int(thickness_dots))
+    return f"CIRCLE {x_dots},{y_dots},{d},{t}\r\n".encode("ascii")
+
+
+def pack_mono_bitmap_rows(rows: list[list[bool]]) -> tuple[int, int, bytes]:
+    """
+    Pack monochrome rows into TSPL BITMAP payload bytes (MSB first per byte).
+
+    Each row is a list of booleans where True means the TSPL BITMAP bit should be `1`
+    (paper / no ink); False means `0` (print black). Rows are padded with `1` on the
+    right so the last byte’s unused bits are paper, not spurious black.
+    """
+    if not rows:
+        return 0, 0, b""
+    height = len(rows)
+    width = max((len(r) for r in rows), default=0)
+    width_bytes = max(1, (width + BITMAP_BITS_PER_BYTE - 1) // BITMAP_BITS_PER_BYTE)
+    total_bits_per_row = width_bytes * BITMAP_BITS_PER_BYTE
+    out = bytearray(height * width_bytes)
+    for y, row in enumerate(rows):
+        base = y * width_bytes
+        for x, on in enumerate(row):
+            if not on:
+                continue
+            byte_idx = x // BITMAP_BITS_PER_BYTE
+            bit_idx = (BITMAP_BITS_PER_BYTE - 1) - (x % BITMAP_BITS_PER_BYTE)
+            out[base + byte_idx] |= 1 << bit_idx
+        for x in range(width, total_bits_per_row):
+            byte_idx = x // BITMAP_BITS_PER_BYTE
+            bit_idx = (BITMAP_BITS_PER_BYTE - 1) - (x % BITMAP_BITS_PER_BYTE)
+            out[base + byte_idx] |= 1 << bit_idx
+    return width_bytes, height, bytes(out)
+
+
+def build_bitmap_command_bytes(
+    x_dots: int,
+    y_dots: int,
+    width_bytes: int,
+    height_dots: int,
+    mode: int,
+    payload: bytes,
+) -> bytes:
+    """Single TSPL BITMAP command with binary payload bytes appended after comma."""
+    wb = max(1, int(width_bytes))
+    hh = max(1, int(height_dots))
+    mm = mode if mode in (0, 1, 2, 3) else TSPL_BITMAP_MODE_OR
+    head = f"BITMAP {x_dots},{y_dots},{wb},{hh},{mm},".encode("ascii")
+    return head + payload + b"\r\n"
+
+
 def build_print_command(copies: int = 1) -> str:
     return f"PRINT {copies},1\r\n"
 
 
 def build_test_label_tspl(
     *,
-    width_mm: float,
-    height_mm: float,
-    gap_mm: float,
+    width: float,
+    height: float,
+    gap: float,
     dpi: int,
     direction: int,
-    offset_x_mm: float,
-    offset_y_mm: float,
+    offset_x: float,
+    offset_y: float,
     text_encoding: str = "utf-8",
 ) -> bytes:
     """Minimal test pattern; caller supplies the same geometry as a real job (label + printer)."""
     preamble = build_label_preamble(
-        width_mm=width_mm,
-        height_mm=height_mm,
-        gap_mm=gap_mm,
+        width=width,
+        height=height,
+        gap=gap,
         dpi=dpi,
         direction=direction,
-        offset_x_mm=offset_x_mm,
-        offset_y_mm=offset_y_mm,
+        offset_x=offset_x,
+        offset_y=offset_y,
     )
     x0 = mm_to_dots(TEST_LABEL_MARGIN_MM, dpi)
     y0 = mm_to_dots(TEST_LABEL_MARGIN_MM, dpi)

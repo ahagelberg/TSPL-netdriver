@@ -9,20 +9,20 @@ dependencies = [
     "uvicorn[standard]>=0.27.0",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
+    "pillow",
     "pyudev>=0.24.0",
     "pyusb>=1.2.1",
 ]
 
 [project.scripts]
-tspl-driver = "tspl_driver.__main__:main"
+tspl-driver = "api.app:run"
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["tspl_driver*"]
-
-[tool.setuptools.package-data]
-tspl_driver = ["static/*", "config.example.json"]
+[tool.setuptools]
+packages = ["api", "app_logging", "config", "printer", "usb_access"]
+py-modules = [
+    "main",
+]
